@@ -1,0 +1,11 @@
+[package]
+name = "bevy-suis"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.13.2"
+
+[dependencies.bevy_xr]
+git = "https://github.com/awtterpip/bevy_oxr.git"
+branch = "webxr-refactor"
