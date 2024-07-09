@@ -1,11 +1,5 @@
-use bevy::{
-    app::Plugin,
-    ecs::component::Component,
-    math::{Quat, Ray3d, Vec3},
-    prelude::App,
-    transform::components::Transform,
-};
-use bevy_xr::{actions::ActionState, hands::LeftHand};
+use bevy::prelude::*;
+use bevy_mod_xr::hands::{HandBone, HandBoneRadius, HAND_JOINT_COUNT};
 
 pub struct SUISXRPlugin;
 impl Plugin for SUISXRPlugin {
@@ -19,6 +13,15 @@ pub struct Joint {
     ori: Quat,
     radius: f32,
 }
+impl Joint {
+    const fn empty() -> Self {
+        Self {
+            pos: Vec3::ZERO,
+            ori: Quat::IDENTITY,
+            radius: 0.0,
+        }
+    }
+}
 pub struct Finger {
     tip: Joint,
     distal: Joint,
@@ -26,11 +29,67 @@ pub struct Finger {
     intermediate: Joint,
     metacarpal: Joint,
 }
+impl Finger {
+    const fn empty() -> Self {
+        Self {
+            tip: Joint::empty(),
+            distal: Joint::empty(),
+            proximal: Joint::empty(),
+            intermediate: Joint::empty(),
+            metacarpal: Joint::empty(),
+        }
+    }
+    fn set_joint(&mut self, bone: &HandBone, joint: Joint) {
+        match bone {
+            HandBone::IndexMetacarpal
+            | HandBone::MiddleMetacarpal
+            | HandBone::RingMetacarpal
+            | HandBone::LittleMetacarpal => self.metacarpal = joint,
+            HandBone::IndexProximal
+            | HandBone::MiddleProximal
+            | HandBone::RingProximal
+            | HandBone::LittleProximal => self.proximal = joint,
+            HandBone::IndexIntermediate
+            | HandBone::MiddleIntermediate
+            | HandBone::RingIntermediate
+            | HandBone::LittleIntermediate => self.intermediate = joint,
+            HandBone::IndexDistal
+            | HandBone::MiddleDistal
+            | HandBone::RingDistal
+            | HandBone::LittleDistal => self.distal = joint,
+            HandBone::IndexTip | HandBone::MiddleTip | HandBone::RingTip | HandBone::LittleTip => {
+                self.tip = joint
+            }
+            _ => (),
+        }
+    }
+}
 pub struct Thumb {
     tip: Joint,
     distal: Joint,
-    intermediate: Joint,
+    proximal: Joint,
     metacarpal: Joint,
+}
+impl Thumb {
+    fn set_joint(&mut self, bone: &HandBone, joint: Joint) {
+        match bone {
+            HandBone::ThumbMetacarpal => self.metacarpal = joint,
+            HandBone::ThumbProximal => self.proximal = joint,
+            HandBone::ThumbDistal => self.distal = joint,
+            HandBone::ThumbTip => self.tip = joint,
+            _ => (),
+        }
+    }
+}
+impl Thumb {
+    const fn empty() -> Self {
+        Self {
+            tip: Joint::empty(),
+            distal: Joint::empty(),
+            proximal: Joint::empty(),
+            metacarpal: Joint::empty(),
+        }
+    }
 }
 pub struct Hand {
     thumb: Thumb,
@@ -39,9 +98,56 @@ pub struct Hand {
     ring: Finger,
     little: Finger,
 }
+impl Hand {
+    pub fn from_query(
+        entities: &[Entity; HAND_JOINT_COUNT],
+        query: &Query<(&GlobalTransform, &HandBoneRadius, &HandBone)>,
+    ) -> Option<Hand> {
+        let mut hand = Hand::empty();
+        for e in entities.iter() {
+            let (transform, radius, bone) = query.get(*e).ok()?;
+            let (_, rot, pos) = transform.to_scale_rotation_translation();
+            let joint = Joint {
+                pos,
+                ori: rot,
+                radius: radius.0,
+            };
+            if bone.is_thumb() {
+                hand.thumb.set_joint(bone, joint);
+                continue;
+            }
+            if bone.is_index() {
+                hand.index.set_joint(bone, joint);
+                continue;
+            }
+            if bone.is_middle() {
+                hand.middle.set_joint(bone, joint);
+                continue;
+            }
+            if bone.is_ring() {
+                hand.ring.set_joint(bone, joint);
+                continue;
+            }
+            if bone.is_little() {
+                hand.little.set_joint(bone, joint);
+                continue;
+            }
+        }
+        Some(hand)
+    }
+    const fn empty() -> Hand {
+        Hand {
+            thumb: Thumb::empty(),
+            index: Finger::empty(),
+            middle: Finger::empty(),
+            ring: Finger::empty(),
+            little: Finger::empty(),
+        }
+    }
+}
 
 pub enum InputDataType {
-    Hand(LeftHand),
+    Hand(Hand),
     // Controller() // lol gotta do this one using the openxr action system :/
     Pointer(Ray3d), // needs datamap tho
 }

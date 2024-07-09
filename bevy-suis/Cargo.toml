@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.13.2"
-
-[dependencies.bevy_xr]
-git = "https://github.com/awtterpip/bevy_oxr.git"
-branch = "webxr-refactor"
+bevy = "0.14"
+openxr = { version = "0.18.0", default-features = false }
+bevy_mod_xr = "0.1.0-rc1"
+bevy_mod_openxr = "0.1.0-rc1"
