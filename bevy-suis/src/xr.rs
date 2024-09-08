@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use bevy_mod_xr::hands::{HandBone, HandBoneRadius, HAND_JOINT_COUNT};
+use bevy_mod_openxr::features::handtracking::OxrHandTracker;
+use bevy_mod_xr::hands::{HandBone, HandBoneRadius, XrHandBoneEntities, HAND_JOINT_COUNT};
 
 pub struct SUISXRPlugin;
 impl Plugin for SUISXRPlugin {
@@ -21,6 +22,14 @@ impl Joint {
             radius: 0.0,
         }
     }
+    fn from_data((transform, radius): (&GlobalTransform, &HandBoneRadius)) -> Self {
+        let (_, rot, pos) = transform.to_scale_rotation_translation();
+        Self {
+            pos,
+            ori: rot,
+            radius: radius.0,
+        }
+    }
 }
 pub struct Finger {
     tip: Joint,
@@ -37,30 +46,6 @@ impl Finger {
             proximal: Joint::empty(),
             intermediate: Joint::empty(),
             metacarpal: Joint::empty(),
-        }
-    }
-    fn set_joint(&mut self, bone: &HandBone, joint: Joint) {
-        match bone {
-            HandBone::IndexMetacarpal
-            | HandBone::MiddleMetacarpal
-            | HandBone::RingMetacarpal
-            | HandBone::LittleMetacarpal => self.metacarpal = joint,
-            HandBone::IndexProximal
-            | HandBone::MiddleProximal
-            | HandBone::RingProximal
-            | HandBone::LittleProximal => self.proximal = joint,
-            HandBone::IndexIntermediate
-            | HandBone::MiddleIntermediate
-            | HandBone::RingIntermediate
-            | HandBone::LittleIntermediate => self.intermediate = joint,
-            HandBone::IndexDistal
-            | HandBone::MiddleDistal
-            | HandBone::RingDistal
-            | HandBone::LittleDistal => self.distal = joint,
-            HandBone::IndexTip | HandBone::MiddleTip | HandBone::RingTip | HandBone::LittleTip => {
-                self.tip = joint
-            }
-            _ => (),
         }
     }
 }
@@ -99,41 +84,43 @@ pub struct Hand {
     little: Finger,
 }
 impl Hand {
-    pub fn from_query(
-        entities: &[Entity; HAND_JOINT_COUNT],
-        query: &Query<(&GlobalTransform, &HandBoneRadius, &HandBone)>,
-    ) -> Option<Hand> {
-        let mut hand = Hand::empty();
-        for e in entities.iter() {
-            let (transform, radius, bone) = query.get(*e).ok()?;
-            let (_, rot, pos) = transform.to_scale_rotation_translation();
-            let joint = Joint {
-                pos,
-                ori: rot,
-                radius: radius.0,
-            };
-            if bone.is_thumb() {
-                hand.thumb.set_joint(bone, joint);
-                continue;
-            }
-            if bone.is_index() {
-                hand.index.set_joint(bone, joint);
-                continue;
-            }
-            if bone.is_middle() {
-                hand.middle.set_joint(bone, joint);
-                continue;
-            }
-            if bone.is_ring() {
-                hand.ring.set_joint(bone, joint);
-                continue;
-            }
-            if bone.is_little() {
-                hand.little.set_joint(bone, joint);
-                continue;
-            }
+    pub fn from_data(data: &[(&GlobalTransform, &HandBoneRadius); HAND_JOINT_COUNT]) -> Hand {
+        Hand {
+            thumb: Thumb {
+                tip: Joint::from_data(data[HandBone::ThumbTip as usize]),
+                distal: Joint::from_data(data[HandBone::ThumbDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::ThumbProximal as usize]),
+                metacarpal: Joint::from_data(data[HandBone::ThumbMetacarpal as usize]),
+            },
+            index: Finger {
+                tip: Joint::from_data(data[HandBone::IndexTip as usize]),
+                distal: Joint::from_data(data[HandBone::IndexDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::IndexProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::IndexIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::IndexMetacarpal as usize]),
+            },
+            middle: Finger {
+                tip: Joint::from_data(data[HandBone::MiddleTip as usize]),
+                distal: Joint::from_data(data[HandBone::MiddleDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::MiddleProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::MiddleIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::MiddleMetacarpal as usize]),
+            },
+            ring: Finger {
+                tip: Joint::from_data(data[HandBone::RingTip as usize]),
+                distal: Joint::from_data(data[HandBone::RingDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::RingProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::RingIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::RingMetacarpal as usize]),
+            },
+            little: Finger {
+                tip: Joint::from_data(data[HandBone::LittleTip as usize]),
+                distal: Joint::from_data(data[HandBone::LittleDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::LittleProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::LittleIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::LittleMetacarpal as usize]),
+            },
         }
-        Some(hand)
     }
     const fn empty() -> Hand {
         Hand {
@@ -144,6 +131,17 @@ impl Hand {
             little: Finger::empty(),
         }
     }
+}
+
+fn get_hands(
+    joint_query: Query<(&GlobalTransform, &HandBoneRadius)>,
+    hand_query: Query<&XrHandBoneEntities>,
+) {
+    let hands = hand_query
+        .iter()
+        .filter_map(|v| joint_query.get_many(v.0).ok())
+        .map(|v| Hand::from_data(&v))
+        .collect::<Vec<_>>();
 }
 
 pub enum InputDataType {
