@@ -1,11 +1,6 @@
-use bevy::{
-    app::Plugin,
-    ecs::component::Component,
-    math::{Quat, Ray3d, Vec3},
-    prelude::App,
-    transform::components::Transform,
-};
-use bevy_xr::{actions::ActionState, hands::LeftHand};
+use bevy::prelude::*;
+use bevy_mod_openxr::features::handtracking::OxrHandTracker;
+use bevy_mod_xr::hands::{HandBone, HandBoneRadius, XrHandBoneEntities, HAND_JOINT_COUNT};
 
 pub struct SUISXRPlugin;
 impl Plugin for SUISXRPlugin {
@@ -19,6 +14,23 @@ pub struct Joint {
     ori: Quat,
     radius: f32,
 }
+impl Joint {
+    const fn empty() -> Self {
+        Self {
+            pos: Vec3::ZERO,
+            ori: Quat::IDENTITY,
+            radius: 0.0,
+        }
+    }
+    fn from_data((transform, radius): (&GlobalTransform, &HandBoneRadius)) -> Self {
+        let (_, rot, pos) = transform.to_scale_rotation_translation();
+        Self {
+            pos,
+            ori: rot,
+            radius: radius.0,
+        }
+    }
+}
 pub struct Finger {
     tip: Joint,
     distal: Joint,
@@ -26,11 +38,43 @@ pub struct Finger {
     intermediate: Joint,
     metacarpal: Joint,
 }
+impl Finger {
+    const fn empty() -> Self {
+        Self {
+            tip: Joint::empty(),
+            distal: Joint::empty(),
+            proximal: Joint::empty(),
+            intermediate: Joint::empty(),
+            metacarpal: Joint::empty(),
+        }
+    }
+}
 pub struct Thumb {
     tip: Joint,
     distal: Joint,
-    intermediate: Joint,
+    proximal: Joint,
     metacarpal: Joint,
+}
+impl Thumb {
+    fn set_joint(&mut self, bone: &HandBone, joint: Joint) {
+        match bone {
+            HandBone::ThumbMetacarpal => self.metacarpal = joint,
+            HandBone::ThumbProximal => self.proximal = joint,
+            HandBone::ThumbDistal => self.distal = joint,
+            HandBone::ThumbTip => self.tip = joint,
+            _ => (),
+        }
+    }
+}
+impl Thumb {
+    const fn empty() -> Self {
+        Self {
+            tip: Joint::empty(),
+            distal: Joint::empty(),
+            proximal: Joint::empty(),
+            metacarpal: Joint::empty(),
+        }
+    }
 }
 pub struct Hand {
     thumb: Thumb,
@@ -39,9 +83,69 @@ pub struct Hand {
     ring: Finger,
     little: Finger,
 }
+impl Hand {
+    pub fn from_data(data: &[(&GlobalTransform, &HandBoneRadius); HAND_JOINT_COUNT]) -> Hand {
+        Hand {
+            thumb: Thumb {
+                tip: Joint::from_data(data[HandBone::ThumbTip as usize]),
+                distal: Joint::from_data(data[HandBone::ThumbDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::ThumbProximal as usize]),
+                metacarpal: Joint::from_data(data[HandBone::ThumbMetacarpal as usize]),
+            },
+            index: Finger {
+                tip: Joint::from_data(data[HandBone::IndexTip as usize]),
+                distal: Joint::from_data(data[HandBone::IndexDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::IndexProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::IndexIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::IndexMetacarpal as usize]),
+            },
+            middle: Finger {
+                tip: Joint::from_data(data[HandBone::MiddleTip as usize]),
+                distal: Joint::from_data(data[HandBone::MiddleDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::MiddleProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::MiddleIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::MiddleMetacarpal as usize]),
+            },
+            ring: Finger {
+                tip: Joint::from_data(data[HandBone::RingTip as usize]),
+                distal: Joint::from_data(data[HandBone::RingDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::RingProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::RingIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::RingMetacarpal as usize]),
+            },
+            little: Finger {
+                tip: Joint::from_data(data[HandBone::LittleTip as usize]),
+                distal: Joint::from_data(data[HandBone::LittleDistal as usize]),
+                proximal: Joint::from_data(data[HandBone::LittleProximal as usize]),
+                intermediate: Joint::from_data(data[HandBone::LittleIntermediate as usize]),
+                metacarpal: Joint::from_data(data[HandBone::LittleMetacarpal as usize]),
+            },
+        }
+    }
+    const fn empty() -> Hand {
+        Hand {
+            thumb: Thumb::empty(),
+            index: Finger::empty(),
+            middle: Finger::empty(),
+            ring: Finger::empty(),
+            little: Finger::empty(),
+        }
+    }
+}
+
+fn get_hands(
+    joint_query: Query<(&GlobalTransform, &HandBoneRadius)>,
+    hand_query: Query<&XrHandBoneEntities>,
+) {
+    let hands = hand_query
+        .iter()
+        .filter_map(|v| joint_query.get_many(v.0).ok())
+        .map(|v| Hand::from_data(&v))
+        .collect::<Vec<_>>();
+}
 
 pub enum InputDataType {
-    Hand(LeftHand),
+    Hand(Hand),
     // Controller() // lol gotta do this one using the openxr action system :/
     Pointer(Ray3d), // needs datamap tho
 }
@@ -62,12 +166,28 @@ impl Field {
         let local_point = reference_to_this_transform.transform_point3(point);
 
         let local_closest_point = match self {
-            Field::Sphere(r) => local_point.normalize() * (local_point.length() - r),
+            Field::Sphere(r) => local_point.normalize() * (local_point.length().min(*r)),
         };
 
         reference_to_this_transform
             .inverse()
             .transform_point3(local_closest_point)
+    }
+    pub fn closest_point2(&self, field_transform: &GlobalTransform, point: Vec3) -> Vec3 {
+        let world_to_local_matrix = field_transform.compute_matrix().inverse();
+        let local_point = world_to_local_matrix.transform_point3(point);
+
+        let local_closest_point = match self {
+            Field::Sphere(r) => local_point.normalize() * (local_point.length().min(*r)),
+        };
+
+        world_to_local_matrix
+            .inverse()
+            .transform_point3(local_closest_point)
+    }
+    pub fn distance2(&self, field_transform: &GlobalTransform, point: Vec3) -> f32 {
+        let closest_point = self.closest_point2(field_transform, point);
+        point.distance(closest_point)
     }
 
     pub fn distance(
@@ -76,8 +196,8 @@ impl Field {
         reference_space: &Transform,
         point: Vec3,
     ) -> f32 {
-        self.closest_point(this_transform, reference_space, point)
-            .length()
+        let closest_point = self.closest_point(this_transform, reference_space, point);
+        point.distance(closest_point)
     }
 }
 
